@@ -1,9 +1,58 @@
+<!-- markdownlint-disable MD013 -->
+
 # The Stolen Szechuan Sauce: A Connor DFIR Walkthrough
 
 Title: The Stolen Szechuan Sauce: A Connor DFIR Walkthrough
 Summary: A public, spoiler-heavy walkthrough of DFIR Madness Case 001 showing a full analyst workflow from intake and preservation through network, host, memory, disk, malware, and final answer alignment.
 Tags: DFIR, incident response, memory forensics, PCAP analysis, Windows forensics, malware analysis, super timeline, DFIR Madness, walkthrough
 Source attribution: Based on DFIR Madness Case 001 and the official follow-on training posts. Structure inspired by the DFIR Madness walkthrough series for PCAP, memory, disk triage, timing, and super timeline analysis, but all prose and conclusions here are original to this writeup.
+
+## Executive Summary
+
+| Category | Finding |
+| --- | --- |
+| Initial Access | RDP brute force led to successful external RDP access to the domain controller. |
+| Malware | `coreupdater.exe` was delivered from `194.61.24.102` and matched Meterpreter-family second-stage behavior. |
+| Persistence | Persistence was directly proven on both systems through a DC service and desktop Run-key plus registry-backed payload storage. |
+| Lateral Movement | The desktop was later accessed from the DC using the compromised administrator context. |
+| Data Staging | `Secret.zip` on the DC and `loot.zip` on the desktop were staged and later deleted. |
+| Command & Control | Callback behavior matched decoded loader logic communicating with `203.78.103.109:443`. |
+| Overall Confidence | Compromise, staging, and file access are directly proven; final exfiltration remains unresolved in the preserved artifacts. |
+
+An external adversary targeted the exposed domain controller with repeated RDP activity, obtained interactive access, and then delivered `coreupdater.exe` from `194.61.24.102`. The recovered malware established persistence, matched Meterpreter-family behavior, and called back to `203.78.103.109:443`. From the domain controller foothold, the adversary later accessed the desktop, deployed the same malware there, and created short-lived archive files including `Secret.zip` and `loot.zip`. The preserved artifacts directly prove compromise, malware deployment, persistence, lateral movement, file access, and local staging. They strongly support theft, but the final exfiltration path was not equally preserved for every staged archive.
+
+## Table Of Contents
+
+- [Introduction](#introduction)
+- [Learning Objectives](#learning-objectives)
+- [Scope and Evidence](#scope-and-evidence)
+- [Tools and Artifacts](#tools-and-artifacts-used)
+- [Methodology](#methodology)
+- [Timeline and Timezone Handling](#timeline-and-timezone-handling)
+- [Network Analysis](#network-analysis)
+- [Host and Log Correlation](#host-and-log-correlation)
+- [Malware Analysis](#malware-analysis)
+- [Data Access, Staging, and Exfiltration](#data-access-staging-and-exfiltration)
+- [Answers to the Lab Questions](#answers-to-the-lab-questions)
+- [Bonus Questions](#bonus-questions)
+- [Score and Lessons Learned](#score-and-lessons-learned)
+- [Investigation Summary](#investigation-summary)
+- [Conclusion](#conclusion)
+- [Attribution](#attribution)
+
+## Attack Flow Diagram
+
+```mermaid
+flowchart TD
+    internet[Internet] --> attacker[194.61.24.102]
+    attacker --> brute[RDP Brute Force]
+    brute --> dc[Domain Controller\n10.42.85.10]
+    dc --> loader[coreupdater.exe]
+    loader --> c2[203.78.103.109:443]
+    c2 --> desktop[Desktop\n10.42.85.115]
+    desktop --> loot[loot.zip]
+    loot --> endstate[Incident Ends]
+```
 
 ## Introduction
 
@@ -26,7 +75,13 @@ The lab mixes two different goals:
 - build a defensible incident narrative from the artifacts
 - answer a fixed set of lab questions directly and cleanly
 
-That split matters. A strong incident report can still lose points if the final answer sheet does not map each conclusion back to the exact question that asked for it. This walkthrough is written to show both the investigation flow and the final question-by-question alignment.
+That split matters. A strong incident report can still lose points if the final answer sheet does not map each conclusion back to the exact question that asked for it.
+
+This walkthrough is written to show both the investigation flow and the final question-by-question alignment.
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> This writeup is structured to do two jobs at once: preserve a defensible investigative narrative and answer the lab prompt directly. The rest of the report keeps those goals aligned without changing the underlying evidence.
 
 ## Spoiler Notice
 
@@ -42,6 +97,10 @@ By the end of this walkthrough, an analyst should be able to:
 - separate accessed, staged, deleted, and exfiltrated states instead of collapsing them into one theft claim
 - normalize network time, scenario time, and host-local time when the endpoint timezone is wrong
 - distinguish directly proven, strongly supported, reconstructed, and unresolved conclusions in the final writeup
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> The investigative value in this case came from disciplined pivots, time normalization, and careful confidence handling. Those themes drive every section that follows.
 
 ## Scope And Evidence
 
@@ -68,6 +127,10 @@ Sanitized relative examples of reviewed material:
 - `case/exports/...`
 
 This public writeup does not embed raw evidence, full logs, full malware samples, full archive hashes, or host-specific local filesystem paths.
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> The writeup is evidence-led but intentionally sanitized for public release. It preserves the investigative logic without exposing raw case material.
 
 ## Tools And Artifacts Used
 
@@ -104,6 +167,10 @@ vol.py -f image.mem --profile=Win2012R2x64 netscan
 vol.py -f image.mem --profile=Win2012R2x64 malfind
 vol.py -f image.mem --profile=Win2012R2x64 pstree -v
 ```
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> The toolset was broad, but each tool served a specific pivot purpose: network reduction, host confirmation, malware characterization, or timeline reconstruction. The commands below remain unchanged because they are part of the investigative record.
 
 ## Methodology
 
@@ -151,11 +218,34 @@ The workflow repeatedly moved from one artifact class to another:
 - disk to timeline: use filenames, archive names, and event windows to reconstruct staging and deletion
 - timeline back to prompt answers: decide what is directly proven, what is reconstructed, and what remains unresolved
 
+> [!IMPORTANT]
+> **Key Takeaway**
+> The investigative flow was deliberate: start with the fastest artifact for pivots, then move lane by lane to confirm, constrain, and explain. That sequencing is a major reason the final conclusions stayed defensible.
+
 ## Timeline And Timezone Handling
 
 This lab has a deliberate timing trap, and it is worth calling out explicitly.
 
-The scenario states Colorado in September 2020, which means the expected scenario time is UTC-6. The network capture infrastructure was aligned to that reality. The host systems, however, were configured to Pacific time, which introduced a one-hour mismatch in host-derived artifacts.
+The scenario states Colorado in September 2020, which means the expected scenario time is UTC-6. The network capture infrastructure was aligned to that reality.
+
+The host systems, however, were configured to Pacific time, which introduced a one-hour mismatch in host-derived artifacts.
+
+### Timeline Overview
+
+```mermaid
+flowchart TD
+    rdp[Initial RDP activity\nconfirmed during incident window]
+    delivery[Malware delivery\n2020-09-19 02:24:06 UTC]
+    persistence[Persistence visible\n02:27:49 UTC\nDesktop by roughly 02:41 UTC]
+    archive1[Archive creation\nDC staging around 02:30-02:34 UTC]
+    desktop[Desktop access\n2020-09-19 02:35:55 UTC]
+    archive2[loot.zip activity\n02:46-02:48 UTC]
+    contact[Final known contact\n2020-09-19 02:57:41 UTC]
+
+    rdp --> delivery --> persistence --> archive1 --> desktop --> archive2 --> contact
+```
+
+The chart above uses only timestamps already stated elsewhere in the report. The initial RDP node remains untimed because this public writeup does not assign it a single normalized timestamp.
 
 ### Time Bases Used In This Walkthrough
 
@@ -192,11 +282,7 @@ psort.py dc01-super.dump --output_time_zone "UTC" -o L2tcsv -w dc01-super-timeli
 Get-WinEvent -Path .\Security.evtx -Oldest | Select-Object -First 5 TimeCreated, Id
 ```
 
-Figure note: Capture the registry or timezone artifact that shows the endpoint configured for Pacific time even though the scenario occurs in Colorado.
-
-Suggested caption: Host timezone evidence showing the endpoint configured for Pacific time while the incident should be interpreted in Colorado local time, creating a one-hour mismatch between host telemetry and the network capture.
-
-Representative output snippet:
+Recovered timezone configuration showed the endpoint set to Pacific time even though the scenario should be interpreted in Colorado local time:
 
 ```text
 Server local time configuration
@@ -204,6 +290,10 @@ Server local time configuration
 - Bias = 480
 - ActiveTimeBias = 420
 ```
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> Timeline work in this case depended on treating timezone configuration as evidence, not background metadata. Normalized UTC kept the narrative consistent across PCAP, host logs, and staged-file activity.
 
 ## Network Analysis
 
@@ -250,27 +340,14 @@ tcpdump -nttttr case001.pcap 'tcp port 3389 and (dst net 10.42.85.0/24 and not s
 tcpdump -nttttr case001.pcap 'host 194.61.24.102'
 ```
 
-Figure note: Capture the clearest network view showing repeated inbound RDP traffic from `194.61.24.102` to `10.42.85.10:3389`.
-
-Suggested caption: Network evidence of repeated inbound RDP activity from `194.61.24.102` to the domain controller at `10.42.85.10`, forming the opening network pattern for the intrusion.
-
-Representative output snippet:
-
-```text
-## Network Log Findings
+Additional direct network findings retained from the original working notes:
 
 - Zeek `conn.log` and `rdp.log` directly prove sustained external RDP activity from `194.61.24.102` to `10.42.85.10:3389` during the incident window.
-```
-
-Figure note: Capture the HTTP request or carved object view showing `/coreupdater.exe` delivered from `194.61.24.102`.
-
-Suggested caption: HTTP delivery of `coreupdater.exe` from `194.61.24.102`, tying the external infrastructure directly to malware staging on the victim network.
-
-Representative output snippet:
-
-```text
 - The PCAP directly preserves attacker-served delivery of `/coreupdater.exe` from `194.61.24.102` to both `10.42.85.10` and `10.42.85.115`, followed by callback traffic to `203.78.103.109:443` that matches the decoded loader behavior.
-```
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> The network evidence established both the intrusion path and the malware infrastructure early. That let later host and malware work focus on confirmation instead of open-ended searching.
 
 ## Host And Log Correlation
 
@@ -319,28 +396,15 @@ Get-WinEvent -Path .\Security.evtx -Oldest |
   Sort-Object TimeCreated
 ```
 
-Figure note: Capture the Terminal Services or Remote Desktop log view showing successful external authentication, session start, and shell creation.
-
-Suggested caption: Terminal Services evidence confirming a successful external RDP session to the domain controller, upgrading the initial access conclusion from suspected to directly proven.
-
-Representative output snippet:
-
-```text
-Windows Event Log Summary: citadel-dc01
+Additional direct log findings retained from the original working notes:
 
 - Recovered `Microsoft-Windows-TerminalServices-RemoteConnectionManager%4Operational.evtx` directly proves successful RDP authentication from `194.61.24.102`.
 - Recovered `Microsoft-Windows-TerminalServices-LocalSessionManager%4Operational.evtx` directly proves `C137\Administrator` session logon, shell start, and disconnect activity during the external RDP window.
-```
-
-Figure note: Capture the clearest log or summary view showing desktop-origin Kerberos, LDAP, SMB, or DCE/RPC activity into the DC.
-
-Suggested caption: Domain controller evidence showing privileged desktop-origin authentication and RPC activity, including the sequence used to support later secret-access conclusions.
-
-Representative output snippet:
-
-```text
 - Zeek `kerberos.log`, `ldap.log`, `smb_mapping.log`, and `dce_rpc.log` directly prove `10.42.85.115` authenticating to the domain controller as `Administrator/C137.LOCAL`, performing LDAP SASL binds, mapping `IPC$`, `NETLOGON`, and `sysvol`, and invoking `LsarLookupNames4`, `DRSBind`, repeated `DRSCrackNames`, `NetrLogonGetDomainInfo`, and `bkrp_BackupKey`.
-```
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> Host logs converted the network story into directly proven interactive access and privileged follow-on activity. They also set the limits on what could and could not be claimed about later archive handling.
 
 ## Malware Analysis
 
@@ -356,6 +420,8 @@ Directly supported malware facts:
 - on-disk path: `C:\Windows\System32\coreupdater.exe`
 - likely original download residue on the desktop: `C:\Users\Administrator\Downloads\coreupdater.exe`
 
+The recovered HTTP payload, the carved desktop copy, and the extracted DC copy are SHA-256 identical: `10f3b92002bb98467334161cf85d0b1730851f9256f83c27db125e9a0c1cfda6`.
+
 ### Loader Behavior
 
 The preserved loader behavior showed:
@@ -367,6 +433,8 @@ The preserved loader behavior showed:
 - staged second-stage download and execution
 
 The callback streams in the PCAP matched that shellcode behavior on both the DC and the desktop.
+
+Decoding the embedded `.lhru` payload reveals a shellcode stager that resolves Windows APIs dynamically, uses raw socket logic, and hardcodes callback destination `203.78.103.109:443`.
 
 ### Meterpreter-Family Evidence
 
@@ -387,6 +455,8 @@ Directly proven persistence points included:
 - DC service persistence through `coreupdater`
 - desktop Run-key persistence through `HKLM\Software\Microsoft\Windows\CurrentVersion\Run\coreupdate`
 - desktop payload storage under `HKLM\Software\q9Z1bssi\JqxNhWJA`
+
+Preserved persistence residue also included the DC service key `ControlSet001\Services\coreupdater`.
 
 ### Migration Uncertainty
 
@@ -423,35 +493,11 @@ grep -E '203\.78\.103\.109|core_migrate|ReflectiveLoader' stage2-strings.txt
 | DC service name | `coreupdater` | directly proven |
 | Final migrated owner process | not conclusively identified | unresolved |
 
-Figure note: Capture either the loader triage view, the decoded callback configuration, or a side-by-side artifact showing delivery plus callback setup.
+This IOC list intentionally contains only high-confidence indicators directly supported by preserved evidence. Lower-confidence pivots and family-level interpretations stay in the narrative rather than being promoted into the compact indicator table.
 
-Suggested caption: Recovered `coreupdater.exe` loader and decoded callback behavior, linking payload delivery from `194.61.24.102` to follow-on command-and-control at `203.78.103.109:443`.
-
-Representative output snippet:
-
-```text
-## coreupdater.exe
-
-- The recovered HTTP payload, the carved desktop copy, and the extracted DC copy are SHA-256 identical: `10f3b92002bb98467334161cf85d0b1730851f9256f83c27db125e9a0c1cfda6`.
-
-## Decoded Loader Behavior
-
-- Decoding the embedded `.lhru` payload reveals a shellcode stager that resolves Windows APIs dynamically, uses raw socket logic, and hardcodes callback destination `203.78.103.109:443`.
-```
-
-Figure note: Capture the desktop Run-key persistence or the strongest recovered service-style persistence residue.
-
-Suggested caption: Registry-backed persistence on the desktop, showing how the compromise survived beyond the initial loader execution window.
-
-Representative output snippet:
-
-```text
-## Persistence
-
-- Desktop Run key: `HKLM\Software\Microsoft\Windows\CurrentVersion\Run\coreupdate`
-- Desktop payload store: `HKLM\Software\q9Z1bssi\JqxNhWJA`
-- DC service key: `ControlSet001\Services\coreupdater`
-```
+> [!IMPORTANT]
+> **Key Takeaway**
+> The malware findings are strongest on delivery, callback, persistence, and family behavior. The one explicit limit is the final migrated owner process, which remains unresolved.
 
 ## Data Access, Staging, And Exfiltration
 
@@ -482,7 +528,9 @@ Directly proven:
 
 This is where the writeup must stay careful.
 
-The challenge answer key is more assertive about theft. The preserved case evidence directly proves local staging and deletion, and it strongly supports hostile hands-on activity during the same window. But the preserved artifacts did not fully prove the final transfer mechanism for every staged archive.
+The challenge answer key is more assertive about theft. The preserved case evidence directly proves local staging and deletion, and it strongly supports hostile hands-on activity during the same window.
+
+But the preserved artifacts did not fully prove the final transfer mechanism for every staged archive.
 
 That means the clean phrasing is:
 
@@ -506,29 +554,14 @@ grep -R "Secret.zip\|loot.zip\|Szechuan Sauce.txt" timeline-exports/
 grep -R "Beth_Secret.txt\|Secret_Beth.txt" timeline-exports/
 ```
 
-Figure note: Capture the timeline, USN, or file-system artifact that most clearly shows the `Secret.zip` creation and deletion sequence on the DC.
-
-Suggested caption: DC-side staging evidence for `Secret.zip`, showing local archive creation and later deletion during the attacker activity window.
-
-Representative output snippet:
-
-```text
-## Related Artifacts
+Additional direct staging findings retained from the original working notes:
 
 - DC staged archive name: `C:\FileShare\Secret.zip`
-```
-
-Figure note: Capture the desktop timeline or file-system evidence that most clearly shows `loot.zip` creation and deletion.
-
-Suggested caption: Desktop staging evidence for `loot.zip`, supporting the conclusion that sensitive files were locally collected into a transient archive before the artifact was removed.
-
-Representative output snippet:
-
-```text
-## Related Artifacts
-
 - Desktop staged archive name: `C:\Users\mortysmith\Documents\loot.zip`
-```
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> The preserved artifacts directly prove file access, local archive staging, and deletion. The report stays disciplined by keeping final exfiltration separate from those stronger conclusions.
 
 ## Answers To The Lab Questions
 
@@ -567,6 +600,10 @@ The table below answers the main prompt questions directly.
 | Did the attacker steal or access any other sensitive files? If so, what times? | Yes, other sensitive files were accessed or manipulated; `loot.zip` and Beth-related artifacts cluster around `02:34-02:48 UTC` | desktop and DC timeline residue | Medium-High | access and staging are stronger than final transfer proof |
 | When was the last known contact with the adversary? | roughly `2020-09-19 02:57:41 UTC` for the last preserved DC-side RDP disconnect, with some callback activity extending later in host artifacts | Terminal Services logs and preserved callback context | Medium | depends on whether "contact" means interactive session or any malware beaconing |
 
+> [!IMPORTANT]
+> **Key Takeaway**
+> This table is the direct answer sheet for the case. It preserves the same conclusions and caveats as the narrative, but makes them easier to audit against the original lab questions.
+
 ## Bonus Questions
 
 These are bonus-style questions rather than core incident narrative questions. They should stay separate from the primary case conclusions.
@@ -579,6 +616,10 @@ These are bonus-style questions rather than core incident narrative questions. T
 | Can the original Beth secret file be recovered? | Partially answered | official answer key identifies `Secret_Beth.txt`; recovery workflow is not reproduced here in detail |
 | What file was timestomped? | Answered | `Beth_Secret.txt` according to the answer key and later artifact interpretation |
 | Which CIS or SANS controls would have helped? | Answered at a high level | discussed in lessons learned and recommendations |
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> The bonus questions matter, but they are intentionally separated from the core incident narrative. That boundary keeps the main conclusions focused on directly supported breach reconstruction.
 
 ## Score And Lessons Learned
 
@@ -614,17 +655,44 @@ This case led to several reusable workflow improvements afterward:
 
 A narrower retrospective point is worth stating plainly: a DFIR workflow should not become a lab-only worksheet, but it still needs a disciplined final pass that checks whether every asked question was actually answered.
 
+> [!IMPORTANT]
+> **Key Takeaway**
+> The retrospective is not a rewrite of the case; it is a quality control layer on the workflow. The strongest improvement here was forcing clearer separation between directly proven, reconstructed, and unresolved claims.
+
+## Investigation Summary
+
+| Investigation Area | Confidence |
+| --- | --- |
+| Initial Access | Directly Proven |
+| Malware | Directly Proven |
+| Persistence | Directly Proven |
+| Lateral Movement | Strongly Supported |
+| Data Access | Directly Proven |
+| Data Staging | Directly Proven |
+| Exfiltration | Unresolved |
+| Timeline | Reconstructed |
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> The case is strongest on initial access, malware, persistence, data access, and staging. The main caution remains exfiltration, where the preserved artifacts support hostile activity but do not fully preserve the final transfer path.
+
 ## Conclusion
 
 In plain language, the attack path was straightforward but damaging.
 
-An external adversary found the exposed domain controller, performed an RDP brute-force attack, and obtained interactive access as the administrator account. From that foothold, the adversary downloaded and launched a malicious loader, established Meterpreter-family command-and-control, touched sensitive files on the DC, moved laterally to the desktop over RDP, deployed the same malware there, and created short-lived archive files used for staging. The preserved artifacts directly prove compromise, staging, and file access. They strongly support theft, but the final transfer path was not equally preserved for every staged archive.
+An external adversary found the exposed domain controller, performed an RDP brute-force attack, and obtained interactive access as the administrator account. From that foothold, the adversary downloaded and launched a malicious loader, established Meterpreter-family command-and-control, touched sensitive files on the DC, moved laterally to the desktop over RDP, deployed the same malware there, and created short-lived archive files used for staging.
+
+The preserved artifacts directly prove compromise, staging, and file access. They strongly support theft, but the final transfer path was not equally preserved for every staged archive.
 
 Future analysts should take three lessons from this lab.
 
 - Start with the fastest lane that can produce pivots. In this case, that was the PCAP.
 - Treat timezones as an investigative problem, not a formatting detail.
 - Keep final reporting honest by separating directly proven, strongly supported, reconstructed, and unresolved conclusions.
+
+> [!IMPORTANT]
+> **Key Takeaway**
+> The final narrative is straightforward because the evidence path was disciplined. This was a proven compromise with proven staging and bounded uncertainty around final exfiltration.
 
 ## Public-Safety Review Checklist
 
@@ -648,3 +716,5 @@ DFIR Madness created the original lab, prompt, answer key, and training posts th
 - Disk triage guide: [DFIR Madness disk triage walkthrough](https://dfirmadness.com/triage-disk-analysis-case-001/)
 - Timing guide: [DFIR Madness timing guide](https://dfirmadness.com/case-001-the-timing-of-it-all/)
 - Super timeline guide: [DFIR Madness super timeline guide](https://dfirmadness.com/case-001-super-timeline-analysis/)
+
+<!-- markdownlint-enable MD013 -->
