@@ -2,10 +2,13 @@
 
 # The Stolen Szechuan Sauce: A Connor DFIR Walkthrough
 
-Title: The Stolen Szechuan Sauce: A Connor DFIR Walkthrough
-Summary: A public, spoiler-heavy walkthrough of DFIR Madness Case 001 showing a full analyst workflow from intake and preservation through network, host, memory, disk, malware, and final answer alignment.
-Tags: DFIR, incident response, memory forensics, PCAP analysis, Windows forensics, malware analysis, super timeline, DFIR Madness, walkthrough
-Source attribution: Based on DFIR Madness Case 001 and the official follow-on training posts. Structure inspired by the DFIR Madness walkthrough series for PCAP, memory, disk triage, timing, and super timeline analysis, but all prose and conclusions here are original to this writeup.
+> **Case:** DFIR Madness Case 001 - The Stolen Szechuan Sauce
+>
+> **Difficulty:** Intermediate
+>
+> **Focus Areas:** Network Forensics, Windows Event Logs, Memory Analysis, Malware Analysis, Timeline Reconstruction
+>
+> **Authoring Style:** Evidence-Based DFIR Investigation
 
 ## Executive Summary
 
@@ -21,8 +24,22 @@ Source attribution: Based on DFIR Madness Case 001 and the official follow-on tr
 
 An external adversary targeted the exposed domain controller with repeated RDP activity, obtained interactive access, and then delivered `coreupdater.exe` from `194.61.24.102`. The recovered malware established persistence, matched Meterpreter-family behavior, and called back to `203.78.103.109:443`. From the domain controller foothold, the adversary later accessed the desktop, deployed the same malware there, and created short-lived archive files including `Secret.zip` and `loot.zip`. The preserved artifacts directly prove compromise, malware deployment, persistence, lateral movement, file access, and local staging. They strongly support theft, but the final exfiltration path was not equally preserved for every staged archive.
 
+## Investigation Philosophy
+
+This walkthrough intentionally distinguishes between:
+
+- Directly Proven
+- Strongly Supported
+- Reconstructed
+- Unresolved
+
+The objective is to separate observable evidence from analytical inference so readers can understand both what the investigation proved and where uncertainty remains.
+
+This methodology reflects real-world DFIR reporting rather than challenge-style solution writing.
+
 ## Table Of Contents
 
+- [Investigation Philosophy](#investigation-philosophy)
 - [Introduction](#introduction)
 - [Learning Objectives](#learning-objectives)
 - [Scope and Evidence](#scope-and-evidence)
@@ -48,7 +65,8 @@ flowchart TD
     attacker --> brute[RDP Brute Force]
     brute --> dc[Domain Controller\n10.42.85.10]
     dc --> loader[coreupdater.exe]
-    loader --> c2[203.78.103.109:443]
+  loader --> persistence[Persistence]
+  persistence --> c2[203.78.103.109:443]
     c2 --> desktop[Desktop\n10.42.85.115]
     desktop --> loot[loot.zip]
     loot --> endstate[Incident Ends]
@@ -634,7 +652,9 @@ Using the lab-review rubric after the case was closed, the walkthrough-level res
 - Data access, staging, and exfiltration handling: improved after review because the statuses were separated more cleanly
 - Reporting clarity and actionability: strong
 
-Overall retrospective result: **8.5/10**
+Overall Assessment
+
+The investigation successfully reconstructed the intrusion using multiple independent evidence sources while explicitly documenting the remaining areas of uncertainty. The strongest conclusions concern initial access, malware deployment, persistence, and local staging. Final exfiltration remains intentionally bounded by the preserved evidence.
 
 Why not higher:
 
@@ -670,7 +690,7 @@ A narrower retrospective point is worth stating plainly: a DFIR workflow should 
 | Data Access | Directly Proven |
 | Data Staging | Directly Proven |
 | Exfiltration | Unresolved |
-| Timeline | Reconstructed |
+| Timeline Reconstruction | High Confidence |
 
 > [!IMPORTANT]
 > **Key Takeaway**
@@ -694,7 +714,7 @@ Future analysts should take three lessons from this lab.
 > **Key Takeaway**
 > The final narrative is straightforward because the evidence path was disciplined. This was a proven compromise with proven staging and bounded uncertainty around final exfiltration.
 
-## Public-Safety Review Checklist
+## Appendix: Public-Safety Review Checklist
 
 This walkthrough was prepared for public release with the following boundaries:
 
