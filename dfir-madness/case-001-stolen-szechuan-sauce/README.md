@@ -1,6 +1,6 @@
 <!-- markdownlint-disable MD013 -->
 
-# The Stolen Szechuan Sauce: A C.O.N.N.O.R. DFIR Walkthrough
+# The Stolen Szechuan Sauce: C.O.N.N.O.R. Investigation Series - McCloud Platform
 
 > **Case:** DFIR Madness Case 001 - The Stolen Szechuan Sauce
 >
